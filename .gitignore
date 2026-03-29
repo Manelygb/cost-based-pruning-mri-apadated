@@ -1,6 +1,11 @@
 # Large data files
 data/train/
 data/train_masks/
+*data*/
+
+#large save folder
+save*/
+*analysis*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
