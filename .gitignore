@@ -6,6 +6,8 @@ data/train_masks/
 #large save folder
 save*/
 *analysis*/
+*.pth
+*.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
