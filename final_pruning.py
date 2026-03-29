@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
 
     # Identity / paths
     p.add_argument("-n", "--name", default="final_mri", help="run name (folder name)")
-    p.add_argument("--save_root", default="save_mri_final_002_10epochs_wtest", help="root output folder")
+    p.add_argument("--save_root", default="save_mri_test_added_val_for_saving", help="root output folder")
     p.add_argument("--data_root", default="dataset_split", help="folder containing train/ and train_masks/")
     p.add_argument("--splitfile", default="dataset_split/split.json", help="train/val split json path")
     p.add_argument("-l", "--load", default="mri_checkpoint_epoch100_89.pth", help="checkpoint path (state_dict)")
@@ -185,7 +185,6 @@ def main() -> None:
     prune_down_total = None if int(args.prune_down_total) < 0 else int(args.prune_down_total)
     
     if str(args.scope).lower().strip() == "custom_seq":
-        # total budget is prune_channels; per-group targets are computed later from *_pct
         budget, requested_prune_user, scope_desc = None, int(args.prune_channels), "CUSTOM_SEQ (total + pct, sequential)"
     else:
         budget, requested_prune_user, scope_desc = resolve_budget_and_requested(
@@ -253,20 +252,6 @@ def main() -> None:
     # ----------------------------
     # Train/val split
     # ----------------------------
-    #if not osp.exists(splitfile):
-    #    os.makedirs(osp.dirname(splitfile), exist_ok=True)
-    #    ids = get_ids(dir_img)
-    #    iddataset = split_train_val(ids, 0.2, splitfile)
-    #    if int(args.quiet_split) != 1:
-    #        log.info(f"New split dataset -> {splitfile}")
-    #else:
-    #    with open(splitfile) as f:
-    #        iddataset = json.load(f)
-    #    if int(args.quiet_split) != 1:
-    #        log.info(f"Load split dataset -> {splitfile}")
-
-    #train_ids = iddataset["train"]
-    #val_ids = iddataset["val"]
     train_ids = get_ids(dir_img)
     val_ids = get_ids(dir_img_val)
     test_ids = get_ids(dir_img_test)
@@ -302,7 +287,6 @@ def main() -> None:
     if int(args.eval_baseline) == 1:
         log.info("Evaluating BASELINE model...")
         val_gen = get_imgs_and_masks(val_ids, dir_img_val, dir_mask_val, args.scale)
-        #val_gen = get_imgs_and_masks(val_ids, dir_img, dir_mask, args.scale)
         baseline_dice = eval_net(net, val_gen, len(val_ids), (device.type == "cuda"), args.batch_size)
         seed_all(args.seed, use_cuda=(device.type == "cuda"))
         log.info(f"BASELINE Dice: {baseline_dice:.6f}")
@@ -407,7 +391,6 @@ def main() -> None:
 
         base_dep = take_dep_snapshot(net)
         
-        # Track explicit (non-dependency) applied per stage
         applied_enc  = 0
         applied_bot  = 0
         applied_dec  = 0
@@ -421,12 +404,6 @@ def main() -> None:
             _ = pruner.preview_selection(int(target_enc))
             pruner.log_selection_distribution(log, pruner._last_selected)
 
-            #applied_enc = int(target_enc)
-            #if friendly_enabled and int(friendly_multiple) > 1 and getattr(pruner, "_effective_prune_last", None) is not None:
-            #    applied_enc = int(pruner._effective_prune_last)
-#
-            #pruner.pruning(int(applied_enc))
-            #log.info(f"Stage encoder: requested={target_enc}, applied={applied_enc} (friendly-adjusted={applied_enc != target_enc})")
             to_request_enc = int(target_enc)
             if friendly_enabled and int(friendly_multiple) > 1 and getattr(pruner, "_effective_prune_last", None) is not None:
                 to_request_enc = int(pruner._effective_prune_last)
@@ -456,19 +433,12 @@ def main() -> None:
             _ = pruner.preview_selection(int(remaining_bot))
             pruner.log_selection_distribution(log, pruner._last_selected)
 
-           #applied_bot = int(remaining_bot)
-           #if friendly_enabled and int(friendly_multiple) > 1 and getattr(pruner, "_effective_prune_last", None) is not None:
-           #    applied_bot = int(pruner._effective_prune_last)
-#
-           #pruner.pruning(int(applied_bot))
-           #log.info(f"Stage bottleneck: requested_remaining={remaining_bot}, applied={applied_bot} (friendly-adjusted={applied_bot != remaining_bot})")
             to_request_bot = int(remaining_bot)
             if friendly_enabled and int(friendly_multiple) > 1 and getattr(pruner, "_effective_prune_last", None) is not None:
                 to_request_bot = int(pruner._effective_prune_last)
 
             applied_bot = pruner.pruning(int(to_request_bot))
             log.info(f"Stage bottleneck: requested_remaining={remaining_bot}, requested_friendly={to_request_bot}, truly_applied={applied_bot} (capped={applied_bot < to_request_bot})")
-            
 
         dep = dep_pruned_counts(base_dep, take_dep_snapshot(net))
         dec_dep = int(dep.get("decoder_dep", 0))
@@ -488,41 +458,29 @@ def main() -> None:
             _ = pruner.preview_selection(int(remaining_dec))
             pruner.log_selection_distribution(log, pruner._last_selected)
 
-            #applied_dec = int(remaining_dec)
-            #if friendly_enabled and int(friendly_multiple) > 1 and getattr(pruner, "_effective_prune_last", None) is not None:
-            #    applied_dec = int(pruner._effective_prune_last)
-#
-            #pruner.pruning(int(applied_dec))
-            #log.info(f"Stage decoder: requested_remaining={remaining_dec}, applied={applied_dec} (friendly-adjusted={applied_dec != remaining_dec})")
             to_request_dec = int(remaining_dec)
             if friendly_enabled and int(friendly_multiple) > 1 and getattr(pruner, "_effective_prune_last", None) is not None:
                 to_request_dec = int(pruner._effective_prune_last)
 
             applied_dec = pruner.pruning(int(to_request_dec))
             log.info(f"Stage decoder: requested_remaining={remaining_dec}, requested_friendly={to_request_dec}, truly_applied={applied_dec} (capped={applied_dec < to_request_dec})")
-            
 
         if input_hw is None:
             raise RuntimeError("Could not infer input HW (train set empty?)")
 
         baseline_metrics["flops_g"] = float(baseline_flops_sum) / 1e9
 
-        # --- TRUE removal accounting ---
-        # dec_dep_from_encoder: decoder channels already removed by encoder dependencies
-        # This is exactly what reduced remaining_dec from target_dec
         dec_dep_from_encoder = max(0, int(target_dec) - int(remaining_dec)) if remaining_dec >= 0 else int(target_dec)
         
-        # bot_dep is reliable: bottleneck input shrinkage from encoder (snapshot-based)
         dep_final = dep_pruned_counts(base_dep, take_dep_snapshot(net))
         true_bot_dep = int(dep_final.get("bottleneck_dep", 0))
-        # Don't use true_dec_dep from snapshot — it conflates encoder dep + decoder's own deconv shrinkage
 
         true_total_removed = (
-            applied_enc           # encoder conv out_ch explicitly removed
-            + applied_bot         # bottleneck conv out_ch explicitly removed (often 0)
-            + applied_dec         # decoder conv out_ch explicitly removed
-            + true_bot_dep        # bottleneck input shrinkage from encoder (dep)
-            + dec_dep_from_encoder  # decoder deconv shrinkage from encoder (dep)
+            applied_enc
+            + applied_bot
+            + applied_dec
+            + true_bot_dep
+            + dec_dep_from_encoder
         )
 
         log.info(
@@ -589,18 +547,12 @@ def main() -> None:
             else:
                 actual_prune_to_apply = int(requested_prune_effective)
 
-
-
-
-
-
-    
-    # ----------------------------
-    # Prune & save
-    # ----------------------------
         pruner.pruning(int(actual_prune_to_apply))
         log.info(f"Pruning complete: requested removal={actual_prune_to_apply}")
 
+    # ----------------------------
+    # Prune & save
+    # ----------------------------
     save_pruned_pth = osp.join(save_dir, "Pruned.pth")
     save_pruned_txt = osp.join(save_dir, "pruned_channels.txt")
     torch.save(net.state_dict(), save_pruned_pth)
@@ -644,12 +596,6 @@ def main() -> None:
     log.info("=" * 92)
 
     optimizer = optim.SGD(net.parameters(), lr=float(args.lr), momentum=0.9)
-    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    #optimizer,
-    #T_max=5000,          # match your iters
-    #eta_min=1e-5         # small final LR
-    #)
-   
 
     save_finetuned = osp.join(save_dir, "Finetuned.pth")
     finetune(
@@ -664,30 +610,29 @@ def main() -> None:
         int(args.batch_size),
         (device.type == "cuda"),
         float(args.scale),
+        # --- val args for best-checkpoint saving ---
+        valset=val_ids,
+        dir_img_val=dir_img_val,
+        dir_mask_val=dir_mask_val,
+        eval_fn=eval_net,
     )
     log.info(f"Saved finetuned weights: {save_finetuned}")
 
-    # Eval finetuned
+    # Eval finetuned on val
+    # Note: net already holds the best weights (loaded inside finetune())
     log.info("Evaluating FINETUNED model...")
-    #val_gen_eval = get_imgs_and_masks(val_ids, dir_img, dir_mask, args.scale)
     val_gen_eval = get_imgs_and_masks(val_ids, dir_img_val, dir_mask_val, args.scale)
-
     finetuned_dice = eval_net(net, val_gen_eval, len(val_ids), (device.type == "cuda"), args.batch_size)
     seed_all(args.seed, use_cuda=(device.type == "cuda"))
     pruned_metrics["dice"] = float(finetuned_dice)
     log.info(f"FINETUNED Dice: {finetuned_dice:.6f}")
 
-
-     # Eval finetuned on test
+    # Eval finetuned on test
     log.info("Evaluating FINETUNED model on test set...")
-    #val_gen_eval = get_imgs_and_masks(val_ids, dir_img, dir_mask, args.scale)
     test_gen_eval = get_imgs_and_masks(test_ids, dir_img_test, dir_mask_test, args.scale)
-
     finetuned_dice_test = eval_net(net, test_gen_eval, len(test_ids), (device.type == "cuda"), args.batch_size)
     seed_all(args.seed, use_cuda=(device.type == "cuda"))
-    #pruned_metrics["dice"] = float(finetuned_dice)
     log.info(f"FINETUNED Dice on TEST set: {finetuned_dice_test:.6f}")
-
 
     # ----------------------------
     # Reporting
@@ -719,7 +664,7 @@ def main() -> None:
             unit="params",
         )
     
-        # Aggregated groups (same grouping as before)
+        # Aggregated groups
         GROUPS = {
             "ENCODER (inc+down1+down2+down3)": ["inc", "down1", "down2", "down3"],
             "BOTTLENECK (down4)":             ["down4"],
@@ -730,7 +675,6 @@ def main() -> None:
             return float(sum(d.get(k, 0) for k in keys))
         
         def _reduction_pct(b: float, p: float) -> float:
-            # percent reduction from baseline -> pruned
             return 0.0 if b == 0 else (1.0 - (p / b)) * 100.0
         
         log.info("=" * 120)
@@ -758,10 +702,8 @@ def main() -> None:
         
         log.info("-" * 120)
 
-
-
     # ----------------------------
-    # Optional benchmarking (NEW)
+    # Optional benchmarking
     # ----------------------------
     if args.bench:
         log.info("=" * 92)
